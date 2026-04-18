@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FinAlly — AI Trading Workstation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        [x-cloak] { display: none !important; }
+        body { background-color: #0d1117; color: #e6edf3; font-family: 'JetBrains Mono', 'Inter', monospace; font-size: 13px; }
+        .terminal-border { border: 1px solid #30363d; }
+        .price-up { animation: flash-green 0.5s ease-out; }
+        .price-down { animation: flash-red 0.5s ease-out; }
+        @keyframes flash-green { 0% { background-color: rgba(35, 134, 54, 0.4); } 100% { background-color: transparent; } }
+        @keyframes flash-red { 0% { background-color: rgba(248, 81, 73, 0.4); } 100% { background-color: transparent; } }
+        .accent-yellow { color: #ecad0a; }
+        .bg-accent-yellow { background-color: #ecad0a; }
+        .btn-purple { background-color: #753991; }
+        .btn-purple:hover { background-color: #8a4ba8; }
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: #0d1117; }
+        ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 10px; }
+        .heatmap-item { transition: all 0.3s ease; }
+    </style>
+</head>
+<body x-data="tradingApp()" class="h-screen flex flex-col overflow-hidden">
+
+    <!-- Header -->
+    <header class="h-10 terminal-border border-t-0 border-x-0 flex items-center justify-between px-4 bg-[#161b22]">
+        <div class="flex items-center space-x-4">
+            <span class="font-bold text-sm tracking-tighter flex items-center">
+                <i data-lucide="layout-grid" class="w-4 h-4 mr-2 accent-yellow"></i>
+                FIN<span class="accent-yellow">ALLY</span>
+            </span>
+            <div class="h-4 w-[1px] bg-[#30363d]"></div>
+            <div class="flex items-center space-x-2 text-[10px]">
+                <div class="w-2 h-2 rounded-full" :class="connected ? 'bg-green-500' : 'bg-red-500'"></div>
+                <span class="text-gray-400" x-text="connected ? 'CONNECTED' : 'RECONNECTING...'"></span>
+            </div>
+        </div>
+        <div class="flex items-center space-x-8">
+            <div class="flex space-x-4">
+                <div class="text-right">
+                    <span class="text-[9px] text-gray-500 uppercase block leading-none">Net Liquidity</span>
+                    <span class="font-bold text-xs" x-text="formatCurrency(portfolio.total_value)"></span>
+                </div>
+                <div class="text-right">
+                    <span class="text-[9px] text-gray-500 uppercase block leading-none">Buying Power</span>
+                    <span class="font-bold text-xs text-green-400" x-text="formatCurrency(portfolio.cash_balance)"></span>
+                </div>
+            </div>
+            <div class="text-[10px] text-gray-400" x-text="currentTime"></div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 flex overflow-hidden">
+        
+        <!-- Left: Watchlist -->
+        <aside class="w-64 terminal-border border-y-0 border-l-0 bg-[#0d1117] flex flex-col">
+            <div class="p-2 border-b terminal-border flex justify-between items-center bg-[#161b22]">
+                <h2 class="text-[10px] font-bold uppercase tracking-wider text-gray-400">Watchlist</h2>
+                <div class="flex space-x-2">
+                    <i data-lucide="search" class="w-3 h-3 text-gray-500 cursor-pointer"></i>
+                    <i data-lucide="plus" @click="addTickerPrompt()" class="w-3 h-3 text-gray-500 cursor-pointer hover:text-white"></i>
+                </div>
+            </div>
+            <div class="flex-1 overflow-y-auto">
+                <template x-for="item in watchlist" :key="item.ticker">
+                    <div class="p-2 border-b terminal-border hover:bg-[#1c2128] cursor-pointer group"
+                         :class="[item.flash, selectedTicker === item.ticker ? 'bg-[#1c2128]' : '']" 
+                         @click="selectedTicker = item.ticker">
+                        <div class="flex justify-between items-center">
+                            <div class="font-bold text-xs" x-text="item.ticker"></div>
+                            <div class="text-right font-mono text-xs">
+                                <div x-text="formatPrice(item.price)"></div>
+                                <div class="text-[9px]" :class="item.price >= item.prev_price ? 'text-green-500' : 'text-red-500'">
+                                    <span x-text="calculateChange(item)"></span>%
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mt-1 h-6 w-full opacity-50 group-hover:opacity-100 transition-opacity">
+                            <svg class="w-full h-full" viewBox="0 0 100 20" preserveAspectRatio="none">
+                                <path :d="getSparkline(item.ticker)" fill="none" stroke="currentColor" 
+                                      :class="item.price >= item.prev_price ? 'text-green-500' : 'text-red-500'" 
+                                      stroke-width="1"></path>
+                            </svg>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </aside>
+
+        <!-- Center: Dashboard -->
+        <section class="flex-1 flex flex-col bg-[#010409] overflow-hidden">
+            <!-- Top: Active Ticker Info & Main Chart -->
+            <div class="flex-1 flex flex-col p-4 overflow-hidden">
+<div class="flex justify-between items-start mb-4">
+                    <div class="flex items-baseline space-x-3">
+                        <h1 class="text-2xl font-bold" x-text="selectedTicker"></h1>
+                        <span class="text-xs text-gray-500">COMMON STOCK</span>
+                    </div>
+                    <div class="text-right">
+                        <div class="text-2xl font-bold font-mono" x-text="formatPrice(getCurrentPrice())"></div>
+                        <div class="text-xs font-mono" :class="getPriceDirectionClass()">
+                            <span x-text="getPriceChangeFormatted()"></span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Main Chart (P&L History) -->
+                <div class="flex-1 terminal-border rounded bg-[#0d1117] p-2 relative">
+                    <canvas id="portfolioChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Bottom: Heatmap & Positions -->
+            <div class="h-60 border-t terminal-border flex">
+                <div class="flex-1 p-2 border-r terminal-border flex flex-col">
+                    <h2 class="text-[9px] font-bold uppercase text-gray-500 mb-2">Portfolio Heatmap (Weight x P&L)</h2>
+                    <div class="flex-1 flex flex-wrap gap-1 content-start overflow-y-auto">
+                        <template x-for="pos in portfolio.positions" :key="pos.ticker">
+                            <div class="heatmap-item flex flex-col items-center justify-center rounded p-1"
+                                 :class="pos.unrealized_pnl >= 0 ? 'bg-green-900/40 text-green-400 border border-green-800' : 'bg-red-900/40 text-red-400 border border-red-800'"
+                                 :style="`width: ${getHeatmapWidth(pos)}%; height: 40px;`"
+                                 :title="`P&L: ${formatCurrency(pos.unrealized_pnl)}`">
+                                <span class="font-bold text-[10px]" x-text="pos.ticker"></span>
+                                <span class="text-[8px]" x-text="pos.pnl_pct.toFixed(1) + '%'"></span>
+                            </div>
+                        </template>
+                        <div x-show="portfolio.positions.length === 0" class="flex-1 flex items-center justify-center text-gray-600 italic text-[10px]">
+                            No active positions
+                        </div>
+                    </div>
+                </div>
+                <div class="flex-1 p-2 overflow-hidden flex flex-col">
+                    <h2 class="text-[9px] font-bold uppercase text-gray-500 mb-2">Positions</h2>
+                    <div class="flex-1 overflow-y-auto">
+                        <table class="w-full text-left">
+                            <thead class="text-[9px] text-gray-500 border-b terminal-border sticky top-0 bg-[#010409]">
+                                <tr>
+                                    <th class="pb-1">SYMBOL</th>
+                                    <th class="pb-1 text-right">QTY</th>
+                                    <th class="pb-1 text-right">COST</th>
+                                    <th class="pb-1 text-right">VALUE</th>
+                                    <th class="pb-1 text-right">P&L</th>
+                                </tr>
+                            </thead>
+                            <tbody class="text-[10px]">
+                                <template x-for="pos in portfolio.positions" :key="pos.ticker">
+                                    <tr class="border-b terminal-border last:border-0 hover:bg-[#161b22]">
+                                        <td class="py-1.5 font-bold" x-text="pos.ticker"></td>
+                                        <td class="py-1.5 text-right font-mono" x-text="pos.quantity.toFixed(2)"></td>
+                                        <td class="py-1.5 text-right font-mono" x-text="formatPrice(pos.avg_cost)"></td>
+                                        <td class="py-1.5 text-right font-mono" x-text="formatPrice(pos.market_value)"></td>
+                                        <td class="py-1.5 text-right font-mono" :class="pos.unrealized_pnl >= 0 ? 'text-green-500' : 'text-red-500'"
+                                            x-text="formatCurrency(pos.unrealized_pnl)"></td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Right: Execution & AI -->
+        <aside class="w-80 terminal-border border-y-0 border-r-0 bg-[#0d1117] flex flex-col">
+            <!-- Trade Panel -->
+            <div class="p-3 border-b terminal-border bg-[#161b22]">
+                <h2 class="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-3">Order Entry</h2>
+                <div class="grid grid-cols-2 gap-2 mb-3">
+                    <button class="py-1.5 rounded text-[10px] font-bold" 
+                            :class="side === 'buy' ? 'bg-green-600 text-white' : 'bg-[#30363d] text-gray-400'"
+                            @click="side = 'buy'">BUY</button>
+                    <button class="py-1.5 rounded text-[10px] font-bold"
+                            :class="side === 'sell' ? 'bg-red-600 text-white' : 'bg-[#30363d] text-gray-400'"
+                            @click="side = 'sell'">SELL</button>
+                </div>
+                <div class="space-y-3">
+                    <div class="flex justify-between items-center">
+                        <label class="text-[9px] text-gray-500 uppercase">Symbol</label>
+                        <span class="font-bold text-xs" x-text="selectedTicker"></span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <label class="text-[9px] text-gray-500 uppercase">Quantity</label>
+                        <input type="number" x-model="tradeQty" class="w-20 bg-[#0d1117] border terminal-border rounded px-1 py-0.5 text-right font-mono text-xs focus:outline-none focus:border-blue-500">
+                    </div>
+                    <div class="pt-2 border-t terminal-border flex justify-between items-center">
+                        <span class="text-[9px] text-gray-500 uppercase">Est. Total</span>
+                        <span class="font-bold text-xs" x-text="formatCurrency(tradeQty * getCurrentPrice())"></span>
+                    </div>
+                    <button @click="placeTrade()" :disabled="loading"
+                            class="w-full py-2 btn-purple rounded font-bold text-white text-[11px] disabled:opacity-50">
+                        TRANSMIT <span x-text="side.toUpperCase()"></span>
+                    </button>
+                </div>
+</div>
+
+            <!-- AI Chat -->
+            <div class="flex-1 flex flex-col overflow-hidden">
+                <div class="p-2 border-b terminal-border flex items-center bg-[#161b22]">
+                    <i data-lucide="bot" class="w-3 h-3 mr-2 accent-yellow"></i>
+                    <h2 class="text-[10px] font-bold uppercase tracking-wider text-gray-400">FinAlly Assistant</h2>
+                </div>
+                <div class="flex-1 overflow-y-auto p-3 space-y-3" id="chat-box">
+                    <template x-for="msg in chatHistory">
+                        <div :class="msg.role === 'user' ? 'text-right' : 'text-left'">
+                            <div class="inline-block max-w-[90%] p-2 rounded text-[11px] leading-relaxed"
+                                 :class="msg.role === 'user' ? 'bg-[#21262d] text-gray-200 border border-[#30363d]' : 'bg-[#161b22] text-blue-100 border border-[#30363d]'">
+                                <div x-text="msg.content"></div>
+                                <template x-if="msg.actions && msg.actions.length > 0">
+                                    <div class="mt-2 pt-2 border-t border-[#30363d] space-y-1">
+                                        <template x-for="action in msg.actions">
+                                            <div class="flex items-center text-[9px] text-green-400">
+                                                <i data-lucide="check-circle" class="w-2.5 h-2.5 mr-1"></i>
+                                                <span x-text="`Executed ${action.side} ${action.quantity} ${action.ticker}`"></span>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+                    <div x-show="loading" class="text-left">
+                        <div class="inline-block p-2 bg-[#161b22] rounded animate-pulse text-[10px] text-gray-500">
+                            Thinking...
+                        </div>
+                    </div>
+                </div>
+                <div class="p-2 border-t terminal-border">
+                    <div class="relative">
+                        <input type="text" x-model="chatInput" @keyup.enter="sendChat()" 
+                               placeholder="Command AI..." 
+                               class="w-full bg-[#161b22] border terminal-border rounded py-1.5 px-3 text-[11px] focus:outline-none focus:border-accent-yellow">
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+    </main>
+
+    <script>
+        function tradingApp() {
+            return {
+                connected: false,
+                loading: false,
+                watchlist: [],
+                portfolio: { cash_balance: 10000, total_value: 10000, positions: [] },
+                selectedTicker: 'AAPL',
+                side: 'buy',
+                tradeQty: 10,
+                chatInput: '',
+                chatHistory: [
+                    { role: 'assistant', content: 'FinAlly online. Ready for market analysis.' }
+                ],
+                priceHistory: {},
+                currentTime: '',
+                chart: null,
+
+                init() {
+                    lucide.createIcons();
+                    this.updateTime();
+                    setInterval(() => this.updateTime(), 1000);
+                    this.fetchWatchlist();
+                    this.fetchPortfolio();
+                    this.initChart();
+                    this.startPriceStream();
+                    setInterval(() => this.updateChart(), 30000);
+                },
+
+                updateTime() {
+                    this.currentTime = new Date().toLocaleTimeString('en-US', { hour12: false });
+                },
+
+                startPriceStream() {
+                    const eventSource = new EventSource('/api/stream/prices');
+                    eventSource.onopen = () => { this.connected = true; };
+                    eventSource.onerror = () => { this.connected = false; };
+                    eventSource.onmessage = (event) => {
+                        const updates = JSON.parse(event.data);
+                        updates.forEach(update => {
+                            let item = this.watchlist.find(w => w.ticker === update.ticker);
+                            if (item) {
+                                const oldPrice = item.price;
+                                Object.assign(item, update);
+                                if (update.price !== oldPrice) {
+                                    item.flash = update.price > oldPrice ? 'price-up' : 'price-down';
+                                    setTimeout(() => item.flash = '', 500);
+                                }
+                            }
+                            if (!this.priceHistory[update.ticker]) this.priceHistory[update.ticker] = [];
+                            this.priceHistory[update.ticker].push(update.price);
+                            if (this.priceHistory[update.ticker].length > 30) this.priceHistory[update.ticker].shift();
+                        });
+                        this.updateTotalValue();
+                    };
+},
+
+                async fetchWatchlist() {
+                    const res = await fetch('/api/watchlist');
+                    this.watchlist = await res.json();
+                },
+
+                async fetchPortfolio() {
+                    const res = await fetch('/api/portfolio');
+                    this.portfolio = await res.json();
+                },
+
+                updateTotalValue() {
+                    let val = this.portfolio.cash_balance;
+                    this.portfolio.positions.forEach(pos => {
+                        const current = this.watchlist.find(w => w.ticker === pos.ticker)?.price || pos.avg_cost;
+                        val += pos.quantity * current;
+                    });
+                    this.portfolio.total_value = val;
+                },
+
+                async placeTrade() {
+                    this.loading = true;
+                    try {
+                        const res = await fetch('/api/portfolio/trade', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                ticker: this.selectedTicker,
+                                quantity: parseFloat(this.tradeQty),
+                                side: this.side
+                            })
+                        });
+                        const result = await res.json();
+                        if (res.ok) {
+                            await this.fetchPortfolio();
+                            this.chatHistory.push({ role: 'assistant', content: `Order Filled: ${this.side.toUpperCase()} ${this.tradeQty} ${this.selectedTicker} @ ${this.formatPrice(result.executed_price)}` });
+                            this.updateChart();
+                        } else {
+                            alert(result.detail || "Trade failed");
+                        }
+                    } finally { this.loading = false; }
+                },
+
+                async sendChat() {
+                    if (!this.chatInput.trim() || this.loading) return;
+                    const msg = this.chatInput;
+                    this.chatHistory.push({ role: 'user', content: msg });
+                    this.chatInput = '';
+                    this.loading = true;
+                    
+                    try {
+                        const res = await fetch('/api/chat', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ message: msg })
+                        });
+                        const data = await res.json();
+                        this.chatHistory.push({ 
+                            role: 'assistant', 
+                            content: data.message,
+                            actions: data.executed_trades 
+                        });
+                        if (data.executed_trades.length > 0 || data.watchlist_changes.length > 0) {
+                            this.fetchPortfolio();
+                            this.fetchWatchlist();
+                        }
+                    } catch (e) {
+                        this.chatHistory.push({ role: 'assistant', content: "Error communicating with AI core." });
+                    } finally {
+                        this.loading = false;
+                        this.$nextTick(() => {
+                            const box = document.getElementById('chat-box');
+                            box.scrollTop = box.scrollHeight;
+                            lucide.createIcons();
+                        });
+                    }
+                },
+
+                addTickerPrompt() {
+                    const t = prompt("Enter ticker symbol:");
+                    if (t) {
+                        fetch('/api/watchlist', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ ticker: t })
+                        }).then(() => this.fetchWatchlist());
+                    }
+                },
+
+                initChart() {
+                    const ctx = document.getElementById('portfolioChart').getContext('2d');
+                    this.chart = new Chart(ctx, {
+                        type: 'line',
+                        data: { labels: [], datasets: [{ label: 'Portfolio Value', data: [], borderColor: '#ecad0a', borderWidth: 2, tension: 0.1, fill: true, backgroundColor: 'rgba(236, 173, 10, 0.05)' }] },
+                        options: {
+                            responsive: true, maintainAspectRatio: false,
+                            plugins: { legend: { display: false } },
+                            scales: {
+                                x: { display: false },
+y: { grid: { color: '#1c2128' }, ticks: { font: { size: 9, family: 'JetBrains Mono' }, color: '#484f58' } }
+                            }
+                        }
+                    });
+                    this.updateChart();
+                },
+
+                async updateChart() {
+                    const res = await fetch('/api/portfolio/history');
+                    const history = await res.json();
+                    if (this.chart && history.length > 0) {
+                        this.chart.data.labels = history.map(h => h.recorded_at);
+                        this.chart.data.datasets[0].data = history.map(h => h.total_value);
+                        this.chart.update();
+                    }
+                },
+
+                formatCurrency(val) { return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val); },
+                formatPrice(val) { return val ? val.toFixed(2) : '0.00'; },
+                calculateChange(item) { return item.prev_price ? (((item.price - item.prev_price) / item.prev_price) * 100).toFixed(2) : '0.00'; },
+                getCurrentPrice() { return this.watchlist.find(w => w.ticker === this.selectedTicker)?.price || 0; },
+                getPriceDirectionClass() {
+                    const item = this.watchlist.find(w => w.ticker === this.selectedTicker);
+                    if (!item) return '';
+                    return item.price >= item.prev_price ? 'text-green-500' : 'text-red-500';
+                },
+                getPriceChangeFormatted() {
+                    const item = this.watchlist.find(w => w.ticker === this.selectedTicker);
+                    if (!item) return '0.00 (0.00%)';
+                    const diff = item.price - item.prev_price;
+                    const pct = (diff / item.prev_price * 100).toFixed(2);
+                    return `${diff >= 0 ? '+' : ''}${diff.toFixed(2)} (${pct}%)`;
+                },
+                getHeatmapWidth(pos) {
+                    const total = this.portfolio.positions.reduce((acc, p) => acc + p.market_value, 0);
+                    return Math.max(15, (pos.market_value / total) * 100);
+                },
+                getSparkline(ticker) {
+                    const prices = this.priceHistory[ticker] || [];
+                    if (prices.length < 2) return "M 0 10 L 100 10";
+                    const min = Math.min(...prices), max = Math.max(...prices), range = max - min || 1;
+                    return prices.map((p, i) => {
+                        const x = (i / (prices.length - 1)) * 100;
+                        const y = 20 - ((p - min) / range) * 20;
+                        return `${i === 0 ? 'M' : 'L'} ${x} ${y}`;
+                    }).join(' ');
+                }
+            }
+        }
+    </script>
+</body>
+</html>
